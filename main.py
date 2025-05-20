@@ -11,6 +11,7 @@ app = FastAPI()
 class PredictionRequest(BaseModel):
     file_url: str
 
+# Load models
 catboost_model = CatBoostClassifier()
 catboost_model.load_model("catboost_model.cbm")
 tfidf_vectorizer = joblib.load("tfidf_vectorizer.pkl")
@@ -21,29 +22,37 @@ async def predict(req: PredictionRequest):
     try:
         file_url = req.file_url.strip()
 
-        # Download the CSV content
+        # Download CSV
         response = requests.get(file_url)
         response.raise_for_status()
-        
-        # Try parsing the response as CSV
         df = pd.read_csv(StringIO(response.text))
-        
-        # Preprocessing
+
+        # Clean Net Amount
         df["Net Amount"] = df["Net Amount"].replace(",", "", regex=True).astype(float)
-        narration_score = narration_classifier.predict_proba(
+
+        # Narration classifier score
+        df["narration_risk_score"] = narration_classifier.predict_proba(
             tfidf_vectorizer.transform(df["Line Desc"].fillna(""))
         )[:, 1]
-        df["narration_risk_score"] = narration_score
 
+        # Define features
         cat_cols = ["Account Name", "Source Name", "Batch Name"]
         num_cols = ["Net Amount", "narration_risk_score"]
+
+        # Preprocess categorical columns properly
         for col in cat_cols:
             df[col] = df[col].astype(str).fillna("MISSING").apply(lambda x: str(x).strip())
 
-        features = cat_cols + num_cols
-        predictions = catboost_model.predict(df[features])
-        probabilities = catboost_model.predict_proba(df[features])[:, 1]
+        # Construct feature DataFrame
+        X = df[cat_cols + num_cols].copy()
+        for col in cat_cols:
+            X[col] = X[col].astype(str)  # enforce string type at prediction
 
+        # Predict
+        predictions = catboost_model.predict(X)
+        probabilities = catboost_model.predict_proba(X)[:, 1]
+
+        # Attach results
         df["Predicted Risk"] = predictions
         df["Predicted Probability"] = probabilities
 
