@@ -11,49 +11,38 @@ app = FastAPI()
 # Load models
 catboost_model = CatBoostClassifier()
 catboost_model.load_model("catboost_model.cbm")
-
 tfidf_vectorizer = joblib.load("tfidf_vectorizer.pkl")
 narration_classifier = joblib.load("narration_classifier.pkl")
 
-# Define input schema
-class FileInput(BaseModel):
+# Define request body
+class FileURLRequest(BaseModel):
     file_url: str
 
 @app.post("/predict")
-def predict(input: FileInput):
-    file_url = input.file_url
-    if not file_url:
-        return {"error": "Missing file_url"}
+async def predict(request: FileURLRequest):
+    file_url = request.file_url
 
-    try:
-        response = requests.get(file_url)
-        df = pd.read_csv(StringIO(response.text))
+    # Download and load CSV
+    response = requests.get(file_url)
+    df = pd.read_csv(StringIO(response.text))
 
-        # Clean and prepare data
-        df["Net Amount"] = df["Net Amount"].replace(",", "", regex=True).astype(float)
+    # Preprocessing
+    df["Net Amount"] = df["Net Amount"].replace(",", "", regex=True).astype(float)
+    narration_score = narration_classifier.predict_proba(
+        tfidf_vectorizer.transform(df["Line Desc"].fillna(""))
+    )[:, 1]
+    df["narration_risk_score"] = narration_score
 
-        # TF-IDF narration scoring
-        narration_score = narration_classifier.predict_proba(
-            tfidf_vectorizer.transform(df["Line Desc"].fillna(""))
-        )[:, 1]
-        df["narration_risk_score"] = narration_score
+    # Feature setup
+    cat_cols = ["Account Name", "Source Name", "Batch Name"]
+    num_cols = ["Net Amount", "narration_risk_score"]
+    for col in cat_cols:
+        df[col] = df[col].fillna("MISSING").astype(str)
 
-        # Set up features
-        cat_cols = ["Account Name", "Source Name", "Batch Name"]
-        num_cols = ["Net Amount", "narration_risk_score"]
-        for col in cat_cols:
-            df[col] = df[col].fillna("MISSING").astype(str)
+    features = cat_cols + num_cols
 
-        features = cat_cols + num_cols
+    # Predict
+    df["Predicted Risk"] = catboost_model.predict(df[features])
+    df["Predicted Probability"] = catboost_model.predict_proba(df[features])[:, 1]
 
-        # Run predictions
-        predictions = catboost_model.predict(df[features])
-        probabilities = catboost_model.predict_proba(df[features])[:, 1]
-
-        df["Predicted Risk"] = predictions
-        df["Predicted Probability"] = probabilities
-
-        return df[["Predicted Risk", "Predicted Probability"]].head(10).to_dict(orient="records")
-    
-    except Exception as e:
-        return {"error": str(e)}
+    return df[["Predicted Risk", "Predicted Probability"]].head(10).to_dict(orient="records")
