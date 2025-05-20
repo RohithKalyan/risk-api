@@ -38,7 +38,7 @@ async def predict(req: PredictionRequest):
         cat_cols = ["Account Name", "Source Name", "Batch Name"]
         num_cols = ["Net Amount", "narration_risk_score"]
         for col in cat_cols:
-            df[col] = df[col].fillna("MISSING").astype(str)
+            df[col] = df[col].astype(str).fillna("MISSING").apply(lambda x: str(x).strip())
 
         features = cat_cols + num_cols
         predictions = catboost_model.predict(df[features])
