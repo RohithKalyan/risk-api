@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
+from pydantic import BaseModel
 import pandas as pd
 import requests
 import joblib
@@ -7,37 +8,52 @@ from io import StringIO
 
 app = FastAPI()
 
+# Load models
 catboost_model = CatBoostClassifier()
 catboost_model.load_model("catboost_model.cbm")
+
 tfidf_vectorizer = joblib.load("tfidf_vectorizer.pkl")
 narration_classifier = joblib.load("narration_classifier.pkl")
 
+# Define input schema
+class FileInput(BaseModel):
+    file_url: str
+
 @app.post("/predict")
-async def predict(request: Request):
-    data = await request.json()
-    file_url = data.get("file_url")
+def predict(input: FileInput):
+    file_url = input.file_url
     if not file_url:
         return {"error": "Missing file_url"}
 
-    response = requests.get(file_url)
-    df = pd.read_csv(StringIO(response.text))
+    try:
+        response = requests.get(file_url)
+        df = pd.read_csv(StringIO(response.text))
 
-    df["Net Amount"] = df["Net Amount"].replace(",", "", regex=True).astype(float)
-    narration_score = narration_classifier.predict_proba(
-        tfidf_vectorizer.transform(df["Line Desc"].fillna(""))
-    )[:, 1]
-    df["narration_risk_score"] = narration_score
+        # Clean and prepare data
+        df["Net Amount"] = df["Net Amount"].replace(",", "", regex=True).astype(float)
 
-    cat_cols = ["Account Name", "Source Name", "Batch Name"]
-    num_cols = ["Net Amount", "narration_risk_score"]
-    for col in cat_cols:
-        df[col] = df[col].fillna("MISSING").astype(str)
+        # TF-IDF narration scoring
+        narration_score = narration_classifier.predict_proba(
+            tfidf_vectorizer.transform(df["Line Desc"].fillna(""))
+        )[:, 1]
+        df["narration_risk_score"] = narration_score
 
-    features = cat_cols + num_cols
-    predictions = catboost_model.predict(df[features])
-    probabilities = catboost_model.predict_proba(df[features])[:, 1]
+        # Set up features
+        cat_cols = ["Account Name", "Source Name", "Batch Name"]
+        num_cols = ["Net Amount", "narration_risk_score"]
+        for col in cat_cols:
+            df[col] = df[col].fillna("MISSING").astype(str)
 
-    df["Predicted Risk"] = predictions
-    df["Predicted Probability"] = probabilities
+        features = cat_cols + num_cols
 
-    return df[["Predicted Risk", "Predicted Probability"]].head(10).to_dict(orient="records")
+        # Run predictions
+        predictions = catboost_model.predict(df[features])
+        probabilities = catboost_model.predict_proba(df[features])[:, 1]
+
+        df["Predicted Risk"] = predictions
+        df["Predicted Probability"] = probabilities
+
+        return df[["Predicted Risk", "Predicted Probability"]].head(10).to_dict(orient="records")
+    
+    except Exception as e:
+        return {"error": str(e)}
