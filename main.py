@@ -24,28 +24,39 @@ async def predict(req: PredictionRequest):
         file_url = req.file_url.strip()
         print(f">>> File URL: {file_url}")
 
-        # Download and parse
+        # Download CSV
         response = requests.get(file_url)
         response.raise_for_status()
         print(">>> File download successful")
 
-        df = pd.read_csv(StringIO(response.text))
+        try:
+            df = pd.read_csv(StringIO(response.text), encoding='utf-8')
+        except Exception as e:
+            print(">>> CSV Read Error:", str(e))
+            return JSONResponse(content={"error": "Failed to read CSV file. Ensure it's UTF-8 encoded."}, status_code=400)
+
         print(f">>> Original rows: {len(df)}")
-        
-        df = df.head(3)  # Limit to 3 for testing
+
+        if "Line Desc" not in df.columns:
+            return JSONResponse(content={"error": "Missing 'Line Desc' column in uploaded CSV."}, status_code=400)
+
+        df = df.head(3)
         print(f">>> Using rows: {len(df)}")
 
-        # Transform and predict
+        # Fill NA and check for empty content
         narrations = df["Line Desc"].fillna("")
+        if narrations.str.strip().eq("").all():
+            return JSONResponse(content={"error": "All values in 'Line Desc' are empty."}, status_code=400)
+
         tfidf_features = tfidf_vectorizer.transform(narrations)
         scores = narration_classifier.predict_proba(tfidf_features)[:, 1]
 
         df["Narration Risk Score"] = scores
-        result = df[["Line Desc", "Narration Risk Score"]].to_dict(orient="records")
-        
-        print(f">>> Returning {len(result)} rows")
-        return JSONResponse(content=result, media_type="application/json")
+        result_data = df[["Line Desc", "Narration Risk Score"]].to_dict(orient="records")
+
+        print(f">>> Returning {len(result_data)} rows")
+        return JSONResponse(content={"results": result_data}, media_type="application/json")
 
     except Exception as e:
-        print(f">>> Error: {str(e)}")
+        print(f">>> Unhandled error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
