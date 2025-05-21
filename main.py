@@ -19,6 +19,11 @@ class PredictionRequest(BaseModel):
 async def predict(req: PredictionRequest):
     try:
         file_url = req.file_url.strip()
+
+        # 🔍 Print debug info to Render logs
+        print(">>>> Received request at /predict")
+        print(">>>> File URL:", file_url)
+
         response = requests.get(file_url)
         response.raise_for_status()
 
@@ -35,4 +40,5 @@ async def predict(req: PredictionRequest):
         return df[["Line Desc", "Narration Risk Score"]].head(10).to_dict(orient="records")
 
     except Exception as e:
+        print(">>>> ERROR:", str(e))  # Optional: log error to logs as well
         return {"error": str(e)}
