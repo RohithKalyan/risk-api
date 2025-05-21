@@ -23,30 +23,30 @@ async def predict(req: PredictionRequest):
         file_url = req.file_url.strip()
         print(f">>> File URL: {file_url}")
 
-        # Download file from GDrive
+        # Download CSV file
         response = requests.get(file_url)
         response.raise_for_status()
         print(">>> File download successful")
 
-        # Read and truncate CSV for test purposes
+        # Read into DataFrame
         df = pd.read_csv(StringIO(response.text))
         print(f">>> Original rows: {len(df)}")
 
-        df = df.head(3)  # TEMP LIMIT to avoid timeout
+        df = df.head(3)  # TEMP LIMIT
         print(f">>> Using rows: {len(df)}")
 
-        # Fill missing values in Line Desc
+        # Handle missing values and transform
         narrations = df["Line Desc"].fillna("")
         tfidf_features = tfidf_vectorizer.transform(narrations)
 
-        # Predict
+        # Predict risk score
         narration_scores = narration_classifier.predict_proba(tfidf_features)[:, 1]
         df["Narration Risk Score"] = narration_scores
 
         result = df[["Line Desc", "Narration Risk Score"]].to_dict(orient="records")
         print(f">>> Returning {len(result)} rows")
 
-        return result
+        return {"predictions": result}
 
     except Exception as e:
         print(f">>> Error: {str(e)}")
